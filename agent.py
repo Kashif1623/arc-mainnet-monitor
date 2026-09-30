@@ -3,12 +3,8 @@ import os
 import threading
 import sqlite3
 import json
-import socket
 import urllib.request
-import urllib.error
 from flask import Flask, jsonify
-
-socket.setdefaulttimeout(3)
 
 PRIMARY_RPC_ENDPOINT = "https://lb.drpc.live/arc/AkLbXOc8IkXki1HqEPdmcWxt_NlEsigR8b3uEl_NDNxu"
 TELEGRAM_BOT_TOKEN = "8996901688:AAHEpEeYGzcMDqMkLBcBwUSou6-ojjoKkgY"
@@ -63,7 +59,7 @@ def get_status_report():
 def monitor_worker():
     log_msg("Monitor worker started successfully (Mainnet)!")
     while True:
-        log_msg("Attempting fetch...")
+        log_msg("Fetching block data...")
         start_time = time.time()
         try:
             rpc_payload = json.dumps({
@@ -79,26 +75,25 @@ def monitor_worker():
                 headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'}
             )
             
-            try:
-                with urllib.request.urlopen(req, timeout=3) as response:
-                    latency = int((time.time() - start_time) * 1000)
-                    if response.status == 200:
-                        res_data = json.loads(response.read().decode('utf-8'))
-                        if "result" in res_data:
-                            block_height = int(res_data["result"], 16)
-                            log_msg(f"🟢 [ONLINE] Block: {block_height} | Ping: {latency}ms")
-                            global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "ONLINE", "latency": latency, "block": block_height}
-                        else:
-                            global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "OFFLINE", "latency": latency, "block": 0}
-                    else:
-                        global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "OFFLINE", "latency": latency, "block": 0}
-            except Exception as inner_e:
-                latency = int((time.time() - start_time) * 1000)
-                log_msg(f"🔴 [TIMEOUT/CONNECTION FAIL]: {inner_e}")
+            # Using a very safe approach with standard open
+            response = urllib.request.urlopen(req, timeout=3)
+            latency = int((time.time() - start_time) * 1000)
+            if response.status == 200:
+                res_data = json.loads(response.read().decode('utf-8'))
+                if "result" in res_data:
+                    block_height = int(res_data["result"], 16)
+                    log_msg(f"🟢 [ONLINE] Block: {block_height} | Ping: {latency}ms")
+                    global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "ONLINE", "latency": latency, "block": block_height}
+                else:
+                    log_msg("🔴 [OFFLINE] Bad result format")
+                    global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "OFFLINE", "latency": latency, "block": 0}
+            else:
+                log_msg("🔴 [OFFLINE] HTTP error")
                 global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "OFFLINE", "latency": latency, "block": 0}
         except Exception as e:
-            log_msg(f"🔴 [ERROR]: {e}")
-            global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "OFFLINE", "latency": 0, "block": 0}
+            latency = int((time.time() - start_time) * 1000)
+            log_msg(f"🔴 [NETWORK/TIMEOUT EXCEPTION]: {e}")
+            global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "OFFLINE", "latency": latency, "block": 0}
         
         time.sleep(10)
 
@@ -114,21 +109,21 @@ def telegram_listener():
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates?offset={offset}&timeout=3"
-            with urllib.request.urlopen(url, timeout=3) as response:
-                if response.status == 200:
-                    data = json.loads(response.read().decode('utf-8'))
-                    for result in data.get("result", []):
-                        offset = result["update_id"] + 1
-                        message = result.get("message", {})
-                        text = message.get("text", "").strip()
-                        chat_id = message.get("chat", {}).get("id")
-                        
-                        if chat_id and text:
-                            log_msg(f"[TG] Command received: {text}")
-                            if text.startswith("/start") or text.lower() == "start":
-                                send_telegram_message(chat_id, "⚡ *ARC Mainnet Monitoring Sentinel is Online!*\n\nSend /status to check node statuses.")
-                            elif text.startswith("/status"):
-                                send_telegram_message(chat_id, get_status_report())
+            response = urllib.request.urlopen(url, timeout=3)
+            if response.status == 200:
+                data = json.loads(response.read().decode('utf-8'))
+                for result in data.get("result", []):
+                    offset = result["update_id"] + 1
+                    message = result.get("message", {})
+                    text = message.get("text", "").strip()
+                    chat_id = message.get("chat", {}).get("id")
+                    
+                    if chat_id and text:
+                        log_msg(f"[TG] Command received: {text}")
+                        if text.startswith("/start") or text.lower() == "start":
+                            send_telegram_message(chat_id, "⚡ *ARC Mainnet Monitoring Sentinel is Online!*\n\nSend /status to check node statuses.")
+                        elif text.startswith("/status"):
+                            send_telegram_message(chat_id, get_status_report())
         except Exception:
             pass
         time.sleep(1)
@@ -169,7 +164,7 @@ def index():
                                 let color = info.status === 'ONLINE' ? '#00ff66' : '#ff3333';
                                 statusHtml += `<div class="node-box" style="border-left-color: ${color}">` +
                                               `${info.status === 'ONLINE' ? '🟢' : '🔴'} <b>ARC Mainnet Node</b><br>` +
-                                              `• Status: <b>${info.status}</b> | Block: <code>${info.block}</code> | Latency: <code>${info.latency}ms</code>` +
+                                              `• Status: <b>${info.status}</b> | Block: <code>${info.block}</code> | Latency: <code>${info.latency}ms` +
                                               `</div>`;
                             }
                         }
