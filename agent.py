@@ -5,16 +5,12 @@ import sqlite3
 import json
 import socket
 import urllib.request
+import urllib.error
 from flask import Flask, jsonify
 
-# Set a strict global socket timeout for all network operations
-socket.setdefaulttimeout(4)
+socket.setdefaulttimeout(3)
 
-# ==========================================
-# CONFIGURATION & GLOBAL STATE (ARC MAINNET)
-# ==========================================
 PRIMARY_RPC_ENDPOINT = "https://lb.drpc.live/arc/AkLbXOc8IkXki1HqEPdmcWxt_NlEsigR8b3uEl_NDNxu"
-
 TELEGRAM_BOT_TOKEN = "8996901688:AAHEpEeYGzcMDqMkLBcBwUSou6-ojjoKkgY"
 DB_FILE = "arc_mainnet_sla.db"
 global_node_data = {}
@@ -48,7 +44,7 @@ def send_telegram_message(chat_id, message):
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = json.dumps({"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}).encode('utf-8')
         req = urllib.request.Request(url, data=payload, headers={'Content-Type': 'application/json'})
-        urllib.request.urlopen(req, timeout=4)
+        urllib.request.urlopen(req, timeout=3)
     except Exception as e:
         log_msg(f"[!] Telegram Error: {e}")
 
@@ -67,7 +63,7 @@ def get_status_report():
 def monitor_worker():
     log_msg("Monitor worker started successfully (Mainnet)!")
     while True:
-        log_msg("Preparing JSON-RPC payload...")
+        log_msg("Attempting fetch...")
         start_time = time.time()
         try:
             rpc_payload = json.dumps({
@@ -80,33 +76,29 @@ def monitor_worker():
             req = urllib.request.Request(
                 PRIMARY_RPC_ENDPOINT, 
                 data=rpc_payload, 
-                headers={
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'Mozilla/5.0'
-                }
+                headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'}
             )
             
-            log_msg("Executing URL open call...")
-            with urllib.request.urlopen(req, timeout=4) as response:
-                latency = int((time.time() - start_time) * 1000)
-                log_msg(f"Got HTTP response with code: {response.status}")
-                if response.status == 200:
-                    res_text = response.read().decode('utf-8')
-                    res_data = json.loads(res_text)
-                    if "result" in res_data:
-                        block_height = int(res_data["result"], 16)
-                        log_msg(f"🟢 [ONLINE] Block: {block_height} | Ping: {latency}ms")
-                        global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "ONLINE", "latency": latency, "block": block_height}
+            try:
+                with urllib.request.urlopen(req, timeout=3) as response:
+                    latency = int((time.time() - start_time) * 1000)
+                    if response.status == 200:
+                        res_data = json.loads(response.read().decode('utf-8'))
+                        if "result" in res_data:
+                            block_height = int(res_data["result"], 16)
+                            log_msg(f"🟢 [ONLINE] Block: {block_height} | Ping: {latency}ms")
+                            global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "ONLINE", "latency": latency, "block": block_height}
+                        else:
+                            global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "OFFLINE", "latency": latency, "block": 0}
                     else:
-                        log_msg(f"🔴 [OFFLINE] Invalid result structure")
                         global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "OFFLINE", "latency": latency, "block": 0}
-                else:
-                    log_msg(f"🔴 [OFFLINE] Bad HTTP status")
-                    global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "OFFLINE", "latency": latency, "block": 0}
+            except Exception as inner_e:
+                latency = int((time.time() - start_time) * 1000)
+                log_msg(f"🔴 [TIMEOUT/CONNECTION FAIL]: {inner_e}")
+                global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "OFFLINE", "latency": latency, "block": 0}
         except Exception as e:
-            latency = int((time.time() - start_time) * 1000)
-            log_msg(f"🔴 [RPC ERROR] Caught exception: {e}")
-            global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "OFFLINE", "latency": latency, "block": 0}
+            log_msg(f"🔴 [ERROR]: {e}")
+            global_node_data[PRIMARY_RPC_ENDPOINT] = {"status": "OFFLINE", "latency": 0, "block": 0}
         
         time.sleep(10)
 
@@ -122,7 +114,7 @@ def telegram_listener():
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates?offset={offset}&timeout=3"
-            with urllib.request.urlopen(url, timeout=4) as response:
+            with urllib.request.urlopen(url, timeout=3) as response:
                 if response.status == 200:
                     data = json.loads(response.read().decode('utf-8'))
                     for result in data.get("result", []):
@@ -141,7 +133,6 @@ def telegram_listener():
             pass
         time.sleep(1)
 
-# Background threads initialization
 threading.Thread(target=monitor_worker, daemon=True).start()
 threading.Thread(target=telegram_listener, daemon=True).start()
 log_msg("Background threads spawned successfully.")
