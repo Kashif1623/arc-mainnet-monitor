@@ -2,8 +2,12 @@ import time
 import os
 import threading
 import sqlite3
+import socket
 import requests
 from flask import Flask, jsonify
+
+# Set global socket timeout to prevent permanent hanging/deadlocks on Render
+socket.setdefaulttimeout(5)
 
 # ==========================================
 # CONFIGURATION & GLOBAL STATE (ARC MAINNET)
@@ -65,6 +69,7 @@ def monitor_worker():
     log_msg("Monitor worker started successfully (Mainnet)!")
     while True:
         for url in ACTIVE_RPC_POOL:
+            log_msg(f"Fetching Mainnet RPC: {url}")
             start_time = time.time()
             try:
                 payload = {"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1}
@@ -82,7 +87,7 @@ def monitor_worker():
                     global_node_data[url] = {"status": "OFFLINE", "latency": latency, "block": 0}
             except Exception as e:
                 latency = int((time.time() - start_time) * 1000)
-                log_msg(f"🔴 [OFFLINE] {url}")
+                log_msg(f"🔴 [OFFLINE] {url} | Error: {e}")
                 global_node_data[url] = {"status": "OFFLINE", "latency": latency, "block": 0}
         time.sleep(10)
 
@@ -113,11 +118,11 @@ def telegram_listener():
                             send_custom_message(chat_id, "⚡ *ARC Mainnet Monitoring Sentinel is Online!*\n\nSend /status to check node statuses.")
                         elif text.startswith("/status"):
                             send_custom_message(chat_id, get_status_report())
-        except Exception:
+        except Exception as e:
             time.sleep(3)
         time.sleep(1)
 
-# Simple background threads initialization
+# Background threads initialization
 threading.Thread(target=monitor_worker, daemon=True).start()
 threading.Thread(target=telegram_listener, daemon=True).start()
 log_msg("Background threads spawned successfully.")
