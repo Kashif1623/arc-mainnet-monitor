@@ -6,8 +6,8 @@ import socket
 import requests
 from flask import Flask, jsonify
 
-# Set global socket timeout to prevent permanent hanging/deadlocks on Render
-socket.setdefaulttimeout(5)
+# Set global socket timeout
+socket.setdefaulttimeout(3)
 
 # ==========================================
 # CONFIGURATION & GLOBAL STATE (ARC MAINNET)
@@ -49,7 +49,7 @@ def send_custom_message(chat_id, message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
-        requests.post(url, json=payload, timeout=5)
+        requests.post(url, json=payload, timeout=3)
     except Exception as e:
         log_msg(f"[!] Telegram Send Error: {e}")
 
@@ -69,17 +69,19 @@ def monitor_worker():
     log_msg("Monitor worker started successfully (Mainnet)!")
     while True:
         for url in ACTIVE_RPC_POOL:
-            log_msg(f"Fetching Mainnet RPC: {url}")
+            log_msg(f"Attempting RPC connection...")
             start_time = time.time()
             try:
                 payload = {"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1}
-                resp = requests.post(url, json=payload, timeout=5)
+                resp = requests.post(url, json=payload, timeout=3)
                 latency = int((time.time() - start_time) * 1000)
+                log_msg(f"RPC response received. Status: {resp.status_code}")
+                
                 if resp.status_code == 200:
                     data = resp.json()
                     if "result" in data:
                         block_height = int(data["result"], 16)
-                        log_msg(f"🟢 [ONLINE] {url} | Block: {block_height} | Ping: {latency}ms")
+                        log_msg(f"🟢 [ONLINE] Block: {block_height} | Ping: {latency}ms")
                         global_node_data[url] = {"status": "ONLINE", "latency": latency, "block": block_height}
                     else:
                         global_node_data[url] = {"status": "OFFLINE", "latency": latency, "block": 0}
@@ -87,23 +89,22 @@ def monitor_worker():
                     global_node_data[url] = {"status": "OFFLINE", "latency": latency, "block": 0}
             except Exception as e:
                 latency = int((time.time() - start_time) * 1000)
-                log_msg(f"🔴 [OFFLINE] {url} | Error: {e}")
+                log_msg(f"🔴 [ERROR/OFFLINE] Details: {e}")
                 global_node_data[url] = {"status": "OFFLINE", "latency": latency, "block": 0}
         time.sleep(10)
 
 def telegram_listener():
     log_msg("Telegram listener started successfully (Mainnet)!")
     try:
-        requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=5)
-        log_msg("Webhook cleared successfully.")
+        requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=3)
     except Exception:
         pass
 
     offset = 0
     while True:
         try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates?offset={offset}&timeout=10"
-            resp = requests.get(url, timeout=15)
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates?offset={offset}&timeout=5"
+            resp = requests.get(url, timeout=8)
             if resp.status_code == 200:
                 data = resp.json()
                 for result in data.get("result", []):
@@ -118,8 +119,8 @@ def telegram_listener():
                             send_custom_message(chat_id, "⚡ *ARC Mainnet Monitoring Sentinel is Online!*\n\nSend /status to check node statuses.")
                         elif text.startswith("/status"):
                             send_custom_message(chat_id, get_status_report())
-        except Exception as e:
-            time.sleep(3)
+        except Exception:
+            time.sleep(2)
         time.sleep(1)
 
 # Background threads initialization
@@ -158,7 +159,7 @@ def index():
                             for (let [url, info] of Object.entries(data.nodes)) {
                                 let color = info.status === 'ONLINE' ? '#00ff66' : '#ff3333';
                                 statusHtml += `<div class="node-box" style="border-left-color: ${color}">` +
-                                              `${info.status === 'ONLINE' ? '🟢' : '🔴'} <b>${url}</b><br>` +
+                                              `${info.status === 'ONLINE' ? '🟢' : '🔴'} <b>ARC Mainnet Node</b><br>` +
                                               `• Status: <b>${info.status}</b> | Block: <code>${info.block}</code> | Latency: <code>${info.latency}ms</code>` +
                                               `</div>`;
                             }
