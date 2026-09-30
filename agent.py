@@ -2,12 +2,9 @@ import time
 import os
 import threading
 import sqlite3
-import socket
-import requests
+import json
+import urllib.request
 from flask import Flask, jsonify
-
-# Set global socket timeout
-socket.setdefaulttimeout(3)
 
 # ==========================================
 # CONFIGURATION & GLOBAL STATE (ARC MAINNET)
@@ -48,8 +45,9 @@ init_db()
 def send_custom_message(chat_id, message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
-        requests.post(url, json=payload, timeout=3)
+        payload = json.dumps({"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}).encode('utf-8')
+        req = urllib.request.Request(url, data=payload, headers={'Content-Type': 'application/json'})
+        urllib.request.urlopen(req, timeout=5)
     except Exception as e:
         log_msg(f"[!] Telegram Send Error: {e}")
 
@@ -69,34 +67,45 @@ def monitor_worker():
     log_msg("Monitor worker started successfully (Mainnet)!")
     while True:
         for url in ACTIVE_RPC_POOL:
-            log_msg(f"Attempting RPC connection...")
+            log_msg("Calling RPC via urllib...")
             start_time = time.time()
             try:
-                payload = {"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1}
-                resp = requests.post(url, json=payload, timeout=3)
-                latency = int((time.time() - start_time) * 1000)
-                log_msg(f"RPC response received. Status: {resp.status_code}")
+                rpc_payload = json.dumps({
+                    "jsonrpc": "2.0",
+                    "method": "eth_blockNumber",
+                    "params": [],
+                    "id": 1
+                }).encode('utf-8')
                 
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if "result" in data:
-                        block_height = int(data["result"], 16)
-                        log_msg(f"🟢 [ONLINE] Block: {block_height} | Ping: {latency}ms")
-                        global_node_data[url] = {"status": "ONLINE", "latency": latency, "block": block_height}
+                req = urllib.request.Request(
+                    url, 
+                    data=rpc_payload, 
+                    headers={'Content-Type': 'application/json'}
+                )
+                
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    latency = int((time.time() - start_time) * 1000)
+                    if response.status == 200:
+                        res_data = json.loads(response.read().decode('utf-8'))
+                        if "result" in res_data:
+                            block_height = int(res_data["result"], 16)
+                            log_msg(f"🟢 [ONLINE] Block: {block_height} | Ping: {latency}ms")
+                            global_node_data[url] = {"status": "ONLINE", "latency": latency, "block": block_height}
+                        else:
+                            global_node_data[url] = {"status": "OFFLINE", "latency": latency, "block": 0}
                     else:
                         global_node_data[url] = {"status": "OFFLINE", "latency": latency, "block": 0}
-                else:
-                    global_node_data[url] = {"status": "OFFLINE", "latency": latency, "block": 0}
             except Exception as e:
                 latency = int((time.time() - start_time) * 1000)
-                log_msg(f"🔴 [ERROR/OFFLINE] Details: {e}")
+                log_msg(f"🔴 [OFFLINE/ERROR] {e}")
                 global_node_data[url] = {"status": "OFFLINE", "latency": latency, "block": 0}
         time.sleep(10)
 
 def telegram_listener():
     log_msg("Telegram listener started successfully (Mainnet)!")
     try:
-        requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=3)
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
+        urllib.request.urlopen(url, timeout=5)
     except Exception:
         pass
 
@@ -104,21 +113,21 @@ def telegram_listener():
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates?offset={offset}&timeout=5"
-            resp = requests.get(url, timeout=8)
-            if resp.status_code == 200:
-                data = resp.json()
-                for result in data.get("result", []):
-                    offset = result["update_id"] + 1
-                    message = result.get("message", {})
-                    text = message.get("text", "").strip()
-                    chat_id = message.get("chat", {}).get("id")
-                    
-                    if chat_id and text:
-                        log_msg(f"[TG] Command received: {text}")
-                        if text.startswith("/start") or text.lower() == "start":
-                            send_custom_message(chat_id, "⚡ *ARC Mainnet Monitoring Sentinel is Online!*\n\nSend /status to check node statuses.")
-                        elif text.startswith("/status"):
-                            send_custom_message(chat_id, get_status_report())
+            with urllib.request.urlopen(url, timeout=8) as response:
+                if response.status == 200:
+                    data = json.loads(response.read().decode('utf-8'))
+                    for result in data.get("result", []):
+                        offset = result["update_id"] + 1
+                        message = result.get("message", {})
+                        text = message.get("text", "").strip()
+                        chat_id = message.get("chat", {}).get("id")
+                        
+                        if chat_id and text:
+                            log_msg(f"[TG] Command received: {text}")
+                            if text.startswith("/start") or text.lower() == "start":
+                                send_custom_message(chat_id, "⚡ *ARC Mainnet Monitoring Sentinel is Online!*\n\nSend /status to check node statuses.")
+                            elif text.startswith("/status"):
+                                send_custom_message(chat_id, get_status_report())
         except Exception:
             time.sleep(2)
         time.sleep(1)
