@@ -13,6 +13,7 @@ PRIMARY_RPC_ENDPOINTS = [
     "https://lb.drpc.live/arc/AkLbXOc8IkXki1HqEPdmcWxt_NlEsigR8b3uEl_NDNxu"
 ]
 
+# Aapke BotFather wale naye bot ka official token
 TELEGRAM_BOT_TOKEN = "8996901688:AAHEpEeYGzcMDqMkLBcBwUSou6-ojjoKkgY"
 DB_FILE = "arc_mainnet_sla.db"
 ACTIVE_RPC_POOL = list(PRIMARY_RPC_ENDPOINTS)
@@ -21,9 +22,6 @@ global_node_data = {}
 app = Flask(__name__)
 log_queue = queue.Queue(maxsize=200)
 
-# ==========================================
-# SQLITE DATABASE SETUP
-# ==========================================
 def init_db():
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -59,9 +57,6 @@ def log_msg(message):
     except Exception:
         pass
 
-# ==========================================
-# TELEGRAM NOTIFICATIONS & COMMANDS
-# ==========================================
 def send_custom_message(chat_id, message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -82,9 +77,6 @@ def get_status_report():
         report += "Initializing nodes data, please wait..."
     return report
 
-# ==========================================
-# BACKGROUND MONITORING WORKER
-# ==========================================
 def monitor_worker():
     log_msg("Mainnet Sentinel Core & Database initialized successfully.")
     while True:
@@ -114,9 +106,6 @@ def monitor_worker():
                 log_to_db(url, "OFFLINE", latency, 0)
         time.sleep(15)
 
-# ==========================================
-# TELEGRAM LISTENER WORKER
-# ==========================================
 def telegram_listener():
     try:
         requests.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/deleteWebhook?drop_pending_updates=true", timeout=5)
@@ -142,17 +131,13 @@ def telegram_listener():
                             send_custom_message(chat_id, "⚡ *ARC Mainnet Monitoring Sentinel is Online!*\n\nSend /status to check node statuses.")
                         elif text.startswith("/status"):
                             send_custom_message(chat_id, get_status_report())
-        except Exception:
+        except Exception as e:
             time.sleep(5)
         time.sleep(1)
 
-# Start background threads
 threading.Thread(target=monitor_worker, daemon=True).start()
 threading.Thread(target=telegram_listener, daemon=True).start()
 
-# ==========================================
-# WEB DASHBOARD (FLASK WITH SSE)
-# ==========================================
 @app.route("/")
 def index():
     html = """
