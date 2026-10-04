@@ -9,8 +9,7 @@ from flask import Flask, Response, jsonify
 # ==========================================
 # CONFIGURATION & GLOBAL STATE (ARC MAINNET)
 # ==========================================
-PRIMARY_RPC_ENDPOINTS = [
-    "https://lb.drpc.live/arc/AkLbXOc8IkXki1HqEPdmcWxt_NlEsigR8b3uEl_NDNxu"
+PRIMARY_RPC_ENDPOINTS = 
 ]
 
 # Aapke BotFather wale naye bot ka official token
