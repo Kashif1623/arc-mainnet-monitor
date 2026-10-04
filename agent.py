@@ -485,10 +485,18 @@ def stream():
         while True:
             try:
                 msg = log_queue.get(timeout=10)
-                yield f"data: {msg}\\n\\n"
+                yield f"data: {msg}\n\n"
             except queue.Empty:
-                yield "data: [ heartbeat ]\\n\\n"
-    return Response(generate(), mimetype="text/event-stream")
+                yield "data: [ heartbeat ]\n\n"
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 @app.route("/api/status")
 def api_status():
