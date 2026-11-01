@@ -1,10 +1,12 @@
 import os
+import sys
 import time
 import threading
 import queue
 import sqlite3
 import requests
 from flask import Flask, Response, jsonify
+from web3 import Web3
 
 # ==========================================
 # CONFIGURATION (MAINNET)
@@ -18,8 +20,27 @@ FALLBACK_RPC_ENDPOINTS = [
     "https://rpc.blockdaemon.mainnet.arc.io",
 ]
 
-TELEGRAM_BOT_TOKEN = "8996901688:AAHEpEeYGzcMdQMkLBcBxUSou6-ojjoKkgY"
-TELEGRAM_CHAT_ID = "8822300532"
+# Secrets are read from the environment only. Never hardcode them.
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# PulseRank heartbeat (Arc mainnet)
+PULSERANK_CONTRACT = "0x1C8DB2fD6ED9d9Caea9e04B157DdE031C28e66F8"
+PULSERANK_ABI = [
+    {
+        "type": "function",
+        "name": "sendHeartbeat",
+        "stateMutability": "nonpayable",
+        "inputs": [{"name": "streamId", "type": "uint256"}],
+        "outputs": [],
+    }
+]
+# Minimum seconds between heartbeats when running as a long-lived server.
+PULSERANK_HEARTBEAT_SECONDS = int(os.getenv("PULSERANK_HEARTBEAT_SECONDS", "1800"))
+_last_heartbeat_at = 0.0
+
+# One-shot mode (used by GitHub Actions): run one monitor cycle, then exit.
+ONE_SHOT = "--once" in sys.argv or os.getenv("RUN_ONCE") == "1"
 EXPECTED_CHAIN_ID = 5042  # Arc mainnet (testnet is 5042002)
 EXPLORER = "https://explorer.arc.io"
 FAILURE_THRESHOLD = 3
@@ -263,9 +284,55 @@ HELP_TEXT = (
 )
 
 # ==========================================
+# PULSERANK HEARTBEAT
+# ==========================================
+def send_pulserank_heartbeat(force=False):
+    """Send an onchain sendHeartbeat(streamId) tx to the PulseRank contract.
+
+    Needs AGENT_PRIVATE_KEY and PULSERANK_STREAM_ID in the environment.
+    Skips quietly when either is missing, and is throttled in server mode.
+    """
+    global _last_heartbeat_at
+    private_key = os.getenv("AGENT_PRIVATE_KEY")
+    stream_id_raw = os.getenv("PULSERANK_STREAM_ID")
+    if not private_key or not stream_id_raw:
+        log_msg("[!] PulseRank heartbeat skipped: AGENT_PRIVATE_KEY or PULSERANK_STREAM_ID not set")
+        return None
+    if not force and time.time() - _last_heartbeat_at < PULSERANK_HEARTBEAT_SECONDS:
+        return None
+    try:
+        stream_id = int(stream_id_raw)
+        w3 = Web3(Web3.HTTPProvider(healthy_url(), request_kwargs={"timeout": 15}))
+        account = w3.eth.account.from_key(private_key)
+        contract = w3.eth.contract(
+            address=Web3.to_checksum_address(PULSERANK_CONTRACT), abi=PULSERANK_ABI
+        )
+        fn = contract.functions.sendHeartbeat(stream_id)
+        tx = fn.build_transaction(
+            {
+                "from": account.address,
+                "nonce": w3.eth.get_transaction_count(account.address),
+                "chainId": EXPECTED_CHAIN_ID,
+                "gasPrice": w3.eth.gas_price,
+            }
+        )
+        if "gas" not in tx:
+            tx["gas"] = fn.estimate_gas({"from": account.address})
+        signed = account.sign_transaction(tx)
+        raw = getattr(signed, "raw_transaction", None) or getattr(signed, "rawTransaction")
+        tx_hash = w3.eth.send_raw_transaction(raw)
+        _last_heartbeat_at = time.time()
+        log_msg(f"💓 PulseRank heartbeat sent (stream {stream_id}): {EXPLORER}/tx/{tx_hash.hex()}")
+        return tx_hash.hex()
+    except Exception as e:
+        # Never log the key; the error text from web3 does not include it.
+        log_msg(f"[!] PulseRank heartbeat failed: {e}")
+        return None
+
+# ==========================================
 # MONITOR
 # ==========================================
-def monitor_worker():
+def monitor_worker(once=False):
     log_msg("Mainnet Sentinel Core & SQLite initialized.")
     while True:
         online_blocks = []
@@ -345,6 +412,9 @@ def monitor_worker():
                 log_msg(f"👀 watch {address} = {bal:.6f} USDC")
             except Exception as e:
                 log_msg(f"[!] watch failed {address}: {e}")
+        send_pulserank_heartbeat(force=once)
+        if once:
+            return
         time.sleep(POLL_SECONDS)
 
 # ==========================================
@@ -442,8 +512,9 @@ def telegram_listener():
             time.sleep(5)
         time.sleep(1)
 
-threading.Thread(target=monitor_worker, daemon=True).start()
-threading.Thread(target=telegram_listener, daemon=True).start()
+if not ONE_SHOT:
+    threading.Thread(target=monitor_worker, daemon=True).start()
+    threading.Thread(target=telegram_listener, daemon=True).start()
 
 # ==========================================
 # DASHBOARD
@@ -509,4 +580,7 @@ def api_status():
     })
 
 if __name__ == "__main__":
+    if ONE_SHOT:
+        monitor_worker(once=True)
+        sys.exit(0)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
